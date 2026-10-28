@@ -24,7 +24,10 @@ if not TOKEN:
         "Thieu token bot. Hay them DISCORD_TOKEN trong FadeHost."
     )
 
-# Cau hinh YouTube
+# ==========================================
+# YOUTUBE CONFIG
+# ==========================================
+
 YTDL_OPTIONS = {
     "format": "bestaudio/best",
     "noplaylist": True,
@@ -32,6 +35,14 @@ YTDL_OPTIONS = {
     "no_warnings": True,
     "default_search": "ytsearch",
     "extract_flat": False,
+    "socket_timeout": 20,
+    "retries": 2,
+    "extractor_retries": 2,
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android_vr"]
+        }
+    },
 }
 
 FFMPEG_OPTIONS = {
@@ -57,13 +68,18 @@ class LeagueUltraDino(discord.Client):
         print("Dang dong bo slash commands...")
 
         if GUILD_ID:
-            # Dong bo rieng cho server, thuong hien len nhanh hon
-            guild = discord.Object(id=int(GUILD_ID))
+            try:
+                guild = discord.Object(id=int(GUILD_ID))
+            except ValueError:
+                raise RuntimeError("GUILD_ID khong hop le.")
+
             self.tree.copy_global_to(guild=guild)
             synced = await self.tree.sync(guild=guild)
-            print(f"Da dong bo {len(synced)} lenh vao server {GUILD_ID}.")
+            print(
+                f"Da dong bo {len(synced)} lenh "
+                f"vao server {GUILD_ID}."
+            )
         else:
-            # Neu khong co GUILD_ID, dong bo lenh toan cuc
             synced = await self.tree.sync()
             print(
                 f"Da dong bo {len(synced)} lenh toan cuc. "
@@ -74,6 +90,7 @@ class LeagueUltraDino(discord.Client):
         print(f"Bot online: {self.user} (ID: {self.user.id})")
         print("League Ultra Dino san sang!")
 
+
 bot = LeagueUltraDino()
 
 # ==========================================
@@ -81,7 +98,6 @@ bot = LeagueUltraDino()
 # ==========================================
 
 def get_user_voice_channel(interaction: discord.Interaction):
-    """Lay phong voice ma nguoi goi lenh dang tham gia."""
     if interaction.guild is None:
         return None
 
@@ -94,7 +110,6 @@ def get_user_voice_channel(interaction: discord.Interaction):
 
 
 async def join_user_channel(interaction: discord.Interaction):
-    """Cho bot vao dung phong cua nguoi goi lenh."""
     channel = get_user_voice_channel(interaction)
 
     if channel is None:
@@ -106,7 +121,7 @@ async def join_user_channel(interaction: discord.Interaction):
 
     if voice_client is None:
         voice_client = await channel.connect(
-            timeout=15,
+            timeout=20,
             reconnect=True
         )
     elif voice_client.channel != channel:
@@ -116,11 +131,10 @@ async def join_user_channel(interaction: discord.Interaction):
 
 
 def extract_youtube_info(query: str):
-    """Lay thong tin bai hat va link audio."""
     with yt_dlp.YoutubeDL(YTDL_OPTIONS) as ydl:
         info = ydl.extract_info(query, download=False)
 
-        if "entries" in info:
+        if info and "entries" in info:
             info = next(
                 (entry for entry in info["entries"] if entry),
                 None
@@ -138,7 +152,6 @@ def extract_youtube_info(query: str):
 
 # ==========================================
 # /JOIN
-# Bot vao phong cua nguoi goi lenh
 # ==========================================
 
 @bot.tree.command(
@@ -150,28 +163,25 @@ async def join(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True)
 
     try:
-        voice_client, channel = await join_user_channel(interaction)
-
+        _, channel = await join_user_channel(interaction)
         await interaction.followup.send(
-            f"✅ Da vao phong thoai **{channel.name}**!"
+            f"Da vao phong thoai **{channel.name}**!"
         )
 
     except Exception as error:
         print(f"Loi /join: {type(error).__name__}: {error}")
-
         await interaction.followup.send(
-            f"❌ Khong vao duoc phong: {error}"
+            f"Khong vao duoc phong: {error}"
         )
 
 
 # ==========================================
 # /PL
-# Tu vao phong nguoi goi lenh va phat nhac
 # ==========================================
 
 @bot.tree.command(
     name="pl",
-    description="Phat nhac YouTube trong phong thoai cua ban"
+    description="Phat nhac YouTube"
 )
 @app_commands.describe(
     link="Link YouTube hoac ten bai hat"
@@ -186,30 +196,28 @@ async def pl(
     try:
         voice_client, channel = await join_user_channel(interaction)
 
-        # Dung bai dang phat truoc khi chuyen bai
         if voice_client.is_playing() or voice_client.is_paused():
             voice_client.stop()
 
         await interaction.followup.send(
-            "🔎 Dang tim bai hat, vui long cho..."
+            "Dang tim bai hat..."
         )
 
-        # Lay thong tin YouTube trong thread de khong chan bot
         info = await asyncio.wait_for(
             asyncio.to_thread(extract_youtube_info, link),
-            timeout=40
+            timeout=60
         )
 
         audio_url = info.get("audio_url")
         title = info.get("title", "Khong ro ten")
+        webpage_url = info.get("webpage_url", link)
 
         if not audio_url:
             await interaction.followup.send(
-                "❌ Khong lay duoc link audio. Hay thu link khac."
+                "Khong lay duoc link audio. Hay thu link khac."
             )
             return
 
-        # Tao nguon audio bang FFmpeg
         source = discord.FFmpegPCMAudio(
             audio_url,
             before_options=FFMPEG_OPTIONS["before_options"],
@@ -219,15 +227,17 @@ async def pl(
         voice_client.play(source)
 
         embed = discord.Embed(
-            title="🎵 League Ultra Dino",
-            description=f"**Dang phat:** [{title}]({info['webpage_url']})",
+            title="League Ultra Dino",
+            description=f"**Dang phat:** [{title}]({webpage_url})",
             color=discord.Color.blurple()
         )
+
         embed.add_field(
-            name="📢 Phong thoai",
+            name="Phong thoai",
             value=channel.name,
             inline=True
         )
+
         embed.set_footer(
             text=f"Yeu cau boi {interaction.user.display_name}"
         )
@@ -236,24 +246,23 @@ async def pl(
 
     except asyncio.TimeoutError:
         await interaction.followup.send(
-            "⏳ Tim bai hat qua lau. Hay thu lai hoac dung link khac."
+            "Tim bai hat qua lau. Hay thu lai."
         )
 
     except ValueError as error:
-        await interaction.followup.send(f"⚠️ {error}")
+        await interaction.followup.send(str(error))
 
     except Exception as error:
         print(f"Loi /pl: {type(error).__name__}: {error}")
 
         await interaction.followup.send(
-            "❌ Khong phat duoc nhac. "
-            f"Loi: `{type(error).__name__}: {error}`"
+            f"Khong phat duoc nhac: "
+            f"`{type(error).__name__}: {error}`"
         )
 
 
 # ==========================================
 # /STOP
-# Dung nhac
 # ==========================================
 
 @bot.tree.command(
@@ -274,14 +283,15 @@ async def stop(interaction: discord.Interaction):
 
     if voice_client.is_playing() or voice_client.is_paused():
         voice_client.stop()
-        await interaction.followup.send("⏹️ Da dung nhac.")
+        await interaction.followup.send("Da dung nhac.")
     else:
-        await interaction.followup.send("Khong co bai nhac nao dang phat.")
+        await interaction.followup.send(
+            "Khong co bai nhac nao dang phat."
+        )
 
 
 # ==========================================
 # /LEAVE
-# Bot roi phong thoai
 # ==========================================
 
 @bot.tree.command(
@@ -305,14 +315,15 @@ async def leave(interaction: discord.Interaction):
             voice_client.stop()
 
         await voice_client.disconnect(force=True)
+
         await interaction.followup.send(
-            "👋 Bot da roi phong thoai."
+            "Bot da roi phong thoai."
         )
 
     except Exception as error:
         print(f"Loi /leave: {type(error).__name__}: {error}")
         await interaction.followup.send(
-            f"❌ Khong roi duoc phong: {error}"
+            f"Khong roi duoc phong: {error}"
         )
 
 
@@ -321,6 +332,6 @@ async def leave(interaction: discord.Interaction):
 # ==========================================
 
 print("Dang khoi tao League Ultra Dino...")
-print("Lenh da khai bao: join, pl, stop, leave")
+print("Lenh: join, pl, stop, leave")
 
 bot.run(TOKEN)
