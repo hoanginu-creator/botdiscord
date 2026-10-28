@@ -8,9 +8,7 @@ from discord import app_commands
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 intents = discord.Intents.default()
-intents.message_content = True
 intents.voice_states = True
-
 
 class LeagueUltraDino(discord.Client):
     def __init__(self):
@@ -19,105 +17,72 @@ class LeagueUltraDino(discord.Client):
 
     async def setup_hook(self):
         await self.tree.sync()
-
+        print("Đã đồng bộ lệnh slash.")
 
 bot = LeagueUltraDino()
 
-YDL_OPTIONS = {
-    "format": "bestaudio/best",
-    "noplaylist": True,
-    "quiet": True,
-    "no_warnings": True,
-}
-
-FFMPEG_OPTIONS = {
-    "before_options": (
-        "-reconnect 1 -reconnect_streamed 1 "
-        "-reconnect_delay_max 5"
-    ),
-    "options": "-vn",
-}
-
-
 @bot.event
 async def on_ready():
-    print(f"🦖 League Ultra Dino online: {bot.user}")
+    print(f"League Ultra Dino online: {bot.user}")
 
-
-@bot.tree.command(name="ping", description="Kiem tra bot")
-async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message(
-        "🦖 League Ultra Dino đang hoạt động!"
-    )
-
-
-@bot.event
-async def on_message(message: discord.Message):
-    if message.author.bot:
-        return
-
-    if not message.content.startswith("!l "):
-        return
-
-    url = message.content[3:].strip()
-
-    if not url.startswith(("https://", "http://")):
-        await message.channel.send(
-            "❌ Hãy nhập link hợp lệ: `!l LINK`"
+@bot.tree.command(name="pl", description="Phát nhạc từ link YouTube")
+@app_commands.describe(link="Đường link bài nhạc YouTube")
+async def pl(interaction: discord.Interaction, link: str):
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "Lệnh này chỉ dùng trong máy chủ.", ephemeral=True
         )
         return
 
-    if not message.guild:
-        return
-
-    if not message.author.voice or not message.author.voice.channel:
-        await message.channel.send(
-            "❌ Bạn cần vào kênh thoại trước!"
+    if not interaction.user.voice or not interaction.user.voice.channel:
+        await interaction.response.send_message(
+            "Bạn cần vào phòng thoại trước.", ephemeral=True
         )
         return
 
-    voice_channel = message.author.voice.channel
-    voice_client = message.guild.voice_client
+    await interaction.response.defer(thinking=True)
 
     try:
-        if voice_client is None:
-            voice_client = await voice_channel.connect()
-        elif voice_client.channel != voice_channel:
-            await voice_client.move_to(voice_channel)
+        channel = interaction.user.voice.channel
+        vc = interaction.guild.voice_client
 
-        if voice_client.is_playing():
-            voice_client.stop()
+        if vc is None:
+            vc = await channel.connect()
+        elif vc.channel != channel:
+            await vc.move_to(channel)
 
-        await message.channel.send("🔎 Đang tải thông tin âm thanh...")
+        def get_info():
+            options = {
+                "format": "bestaudio/best",
+                "quiet": True,
+                "noplaylist": True,
+            }
+            with yt_dlp.YoutubeDL(options) as ydl:
+                return ydl.extract_info(link, download=False)
 
-        def get_audio_info():
-            with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-                return ydl.extract_info(url, download=False)
-
-        info = await asyncio.to_thread(get_audio_info)
+        info = await asyncio.to_thread(get_info)
         audio_url = info["url"]
         title = info.get("title", "Không rõ tên bài")
 
+        if vc.is_playing():
+            vc.stop()
+
         source = discord.FFmpegPCMAudio(
             audio_url,
-            **FFMPEG_OPTIONS
+            before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+            options="-vn"
         )
+        vc.play(source)
 
-        voice_client.play(source)
-
-        await message.channel.send(
-            f"🎵 Đang phát: **{title}**"
-        )
+        await interaction.followup.send(f"🎵 Đang phát: **{title}**")
 
     except Exception as e:
-        print(f"Lỗi phát nhạc: {e}")
-        await message.channel.send(
-            "❌ Không phát được nhạc. Kiểm tra FFmpeg, "
-            "quyền kênh thoại và link âm thanh."
+        print(f"Lỗi phát nhạc: {type(e).__name__}: {e}")
+        await interaction.followup.send(
+            f"Không phát được nhạc: `{type(e).__name__}: {e}`"
         )
 
-
 if not TOKEN:
-    raise RuntimeError("Chua co DISCORD_TOKEN")
+    raise RuntimeError("Thiếu biến môi trường DISCORD_TOKEN")
 
 bot.run(TOKEN)
