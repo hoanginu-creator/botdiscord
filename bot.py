@@ -5,12 +5,26 @@ import discord
 import yt_dlp
 from discord import app_commands
 
-TOKEN = os.getenv("DISCORD_TOKEN")
+# =========================
+# CẤU HÌNH
+# =========================
+
+TOKEN = (
+    os.getenv("DISCORD_TOKEN")
+    or os.getenv("DISCORD_BOT_TOKEN")
+    or os.getenv("BOT_TOKEN")
+    or os.getenv("TOKEN")
+)
+
 GUILD_ID = os.getenv("GUILD_ID")
 
 intents = discord.Intents.default()
 intents.voice_states = True
 
+
+# =========================
+# BOT
+# =========================
 
 class LeagueUltraDino(discord.Client):
     def __init__(self):
@@ -18,40 +32,64 @@ class LeagueUltraDino(discord.Client):
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
+        print("Đang khởi tạo lệnh Discord...")
+
+        commands = self.tree.get_commands()
+        print("Lệnh đã khai báo:", [cmd.name for cmd in commands])
+
         if not GUILD_ID:
-            raise RuntimeError("Thiếu biến môi trường GUILD_ID trong FadeHost")
+            raise RuntimeError(
+                "Thiếu GUILD_ID trong Environment Variables của FadeHost"
+            )
 
         guild = discord.Object(id=int(GUILD_ID))
+
+        # Đồng bộ lệnh vào máy chủ để hiện nhanh
         self.tree.copy_global_to(guild=guild)
         synced = await self.tree.sync(guild=guild)
 
-        print(f"Đã đồng bộ {len(synced)} lệnh vào máy chủ {GUILD_ID}:")
+        print(f"Đã đồng bộ {len(synced)} lệnh vào máy chủ {GUILD_ID}")
+
         for command in synced:
-            print(f"- /{command.name}")
+            print(f"Đã đăng ký: /{command.name}")
 
 
 bot = LeagueUltraDino()
 
 
+# =========================
+# KHI BOT ONLINE
+# =========================
+
 @bot.event
 async def on_ready():
-    print(f"League Ultra Dino online: {bot.user}")
+    print(f"Bot online: {bot.user}")
+    print(f"Bot ID: {bot.user.id}")
 
 
-@bot.tree.command(name="pl", description="Phát nhạc từ link YouTube")
-@app_commands.describe(link="Đường link bài nhạc YouTube")
+# =========================
+# LỆNH /PL
+# =========================
+
+@bot.tree.command(
+    name="pl",
+    description="Phát nhạc từ đường link YouTube"
+)
+@app_commands.describe(
+    link="Dán đường link bài nhạc YouTube"
+)
 async def pl(interaction: discord.Interaction, link: str):
+
     if interaction.guild is None:
         await interaction.response.send_message(
-            "Lệnh này chỉ dùng trong máy chủ Discord.",
+            "Lệnh này chỉ sử dụng trong máy chủ Discord.",
             ephemeral=True
         )
         return
 
-    voice_state = getattr(interaction.user, "voice", None)
-    if voice_state is None or voice_state.channel is None:
+    if not interaction.user.voice or not interaction.user.voice.channel:
         await interaction.response.send_message(
-            "Bạn hãy vào phòng thoại trước nhé.",
+            "Bạn cần vào phòng thoại trước khi phát nhạc.",
             ephemeral=True
         )
         return
@@ -59,98 +97,144 @@ async def pl(interaction: discord.Interaction, link: str):
     await interaction.response.defer(thinking=True)
 
     try:
-        channel = voice_state.channel
-        vc = interaction.guild.voice_client
+        channel = interaction.user.voice.channel
+        voice_client = interaction.guild.voice_client
 
-        if vc is None:
-            vc = await channel.connect()
-        elif vc.channel != channel:
-            await vc.move_to(channel)
+        # Tham gia hoặc chuyển phòng thoại
+        if voice_client is None:
+            voice_client = await channel.connect()
+        elif voice_client.channel != channel:
+            await voice_client.move_to(channel)
 
-        def get_audio_info():
+        # Lấy thông tin âm thanh từ YouTube
+        def extract_audio():
             options = {
                 "format": "bestaudio/best",
                 "quiet": True,
-                "noplaylist": True,
                 "no_warnings": True,
+                "noplaylist": True,
             }
+
             with yt_dlp.YoutubeDL(options) as ydl:
                 return ydl.extract_info(link, download=False)
 
-        info = await asyncio.to_thread(get_audio_info)
+        info = await asyncio.to_thread(extract_audio)
+
         audio_url = info.get("url")
         title = info.get("title", "Không rõ tên bài")
 
         if not audio_url:
-            raise RuntimeError("Không lấy được đường dẫn âm thanh từ YouTube.")
+            raise RuntimeError("Không lấy được đường dẫn âm thanh.")
 
-        if vc.is_playing() or vc.is_paused():
-            vc.stop()
+        # Dừng bài hiện tại nếu đang phát
+        if voice_client.is_playing() or voice_client.is_paused():
+            voice_client.stop()
 
+        # Phát nhạc bằng FFmpeg
         source = discord.FFmpegPCMAudio(
             audio_url,
             before_options=(
-                "-reconnect 1 -reconnect_streamed 1 "
+                "-reconnect 1 "
+                "-reconnect_streamed 1 "
                 "-reconnect_delay_max 5"
             ),
             options="-vn"
         )
 
-        vc.play(source)
-        await interaction.followup.send(f"🎵 Đang phát: **{title}**")
+        voice_client.play(source)
 
-    except Exception as e:
-        print(f"Lỗi phát nhạc: {type(e).__name__}: {e}")
         await interaction.followup.send(
-            f"❌ Không phát được nhạc: `{type(e).__name__}: {e}`"
+            f"🎵 Đang phát: **{title}**"
+        )
+
+    except Exception as error:
+        print(
+            f"Lỗi /pl: {type(error).__name__}: {error}"
+        )
+
+        await interaction.followup.send(
+            f"❌ Không phát được nhạc: "
+            f"`{type(error).__name__}: {error}`"
         )
 
 
-@bot.tree.command(name="stop", description="Dừng phát nhạc")
+# =========================
+# LỆNH /STOP
+# =========================
+
+@bot.tree.command(
+    name="stop",
+    description="Dừng phát nhạc"
+)
 async def stop(interaction: discord.Interaction):
+
     if interaction.guild is None:
         await interaction.response.send_message(
-            "Lệnh này chỉ dùng trong máy chủ Discord.",
+            "Lệnh này chỉ sử dụng trong máy chủ.",
             ephemeral=True
         )
         return
 
-    vc = interaction.guild.voice_client
-    if vc is None or not (vc.is_playing() or vc.is_paused()):
+    voice_client = interaction.guild.voice_client
+
+    if voice_client and (
+        voice_client.is_playing() or voice_client.is_paused()
+    ):
+        voice_client.stop()
         await interaction.response.send_message(
-            "Hiện không có bài nhạc nào đang phát.",
+            "⏹️ Đã dừng nhạc."
+        )
+    else:
+        await interaction.response.send_message(
+            "Hiện không có nhạc đang phát.",
             ephemeral=True
         )
-        return
-
-    vc.stop()
-    await interaction.response.send_message("⏹️ Đã dừng nhạc.")
 
 
-@bot.tree.command(name="leave", description="Cho bot rời phòng thoại")
+# =========================
+# LỆNH /LEAVE
+# =========================
+
+@bot.tree.command(
+    name="leave",
+    description="Cho bot rời phòng thoại"
+)
 async def leave(interaction: discord.Interaction):
+
     if interaction.guild is None:
         await interaction.response.send_message(
-            "Lệnh này chỉ dùng trong máy chủ Discord.",
+            "Lệnh này chỉ sử dụng trong máy chủ.",
             ephemeral=True
         )
         return
 
-    vc = interaction.guild.voice_client
-    if vc is None:
+    voice_client = interaction.guild.voice_client
+
+    if voice_client is None:
         await interaction.response.send_message(
             "Bot hiện không ở trong phòng thoại.",
             ephemeral=True
         )
         return
 
-    await vc.disconnect()
+    if voice_client.is_playing() or voice_client.is_paused():
+        voice_client.stop()
+
+    await voice_client.disconnect()
+
     await interaction.response.send_message(
-        "👋 Bot đã rời phòng thoại."
+        "👋 League Ultra Dino đã rời phòng thoại."
     )
 
 
+# =========================
+# CHẠY BOT
+# =========================
+
 if not TOKEN:
-    raise RuntimeError("Thiếu biến môi trường DISCORD_TOKEN")
+    raise RuntimeError(
+        "Không tìm thấy token. Hãy đặt DISCORD_TOKEN "
+        "trong Environment Variables."
+    )
 
 bot.run(TOKEN)
