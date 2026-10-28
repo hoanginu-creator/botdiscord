@@ -5,9 +5,9 @@ import discord
 import yt_dlp
 from discord import app_commands
 
-# =========================
-# CẤU HÌNH
-# =========================
+# ==========================================
+# CONFIGURATION
+# ==========================================
 
 TOKEN = (
     os.getenv("DISCORD_TOKEN")
@@ -22,9 +22,9 @@ intents = discord.Intents.default()
 intents.voice_states = True
 
 
-# =========================
-# BOT
-# =========================
+# ==========================================
+# BOT CLIENT
+# ==========================================
 
 class LeagueUltraDino(discord.Client):
     def __init__(self):
@@ -32,34 +32,43 @@ class LeagueUltraDino(discord.Client):
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
-        print("Đang khởi tạo lệnh Discord...")
-
-        commands = self.tree.get_commands()
-        print("Lệnh đã khai báo:", [cmd.name for cmd in commands])
+        print("Dang khoi tao League Ultra Dino...")
 
         if not GUILD_ID:
             raise RuntimeError(
-                "Thiếu GUILD_ID trong Environment Variables của FadeHost"
+                "Thieu GUILD_ID trong Environment Variables."
             )
 
         guild = discord.Object(id=int(GUILD_ID))
 
-        # Đồng bộ lệnh vào máy chủ để hiện nhanh
+        # Khai bao cac slash command truoc khi dong bo
         self.tree.copy_global_to(guild=guild)
+
+        commands = self.tree.get_commands()
+        print(
+            "Cac lenh da khai bao:",
+            [command.name for command in commands]
+        )
+
         synced = await self.tree.sync(guild=guild)
 
-        print(f"Đã đồng bộ {len(synced)} lệnh vào máy chủ {GUILD_ID}")
+        print(
+            f"Da dong bo {len(synced)} lenh vao server {GUILD_ID}"
+        )
 
         for command in synced:
-            print(f"Đã đăng ký: /{command.name}")
+            print(f"Da dang ky: /{command.name}")
+
+    async def on_error(self, event_method, *args, **kwargs):
+        print(f"Loi su kien Discord: {event_method}")
 
 
 bot = LeagueUltraDino()
 
 
-# =========================
-# KHI BOT ONLINE
-# =========================
+# ==========================================
+# BOT READY
+# ==========================================
 
 @bot.event
 async def on_ready():
@@ -67,70 +76,84 @@ async def on_ready():
     print(f"Bot ID: {bot.user.id}")
 
 
-# =========================
-# LỆNH /PL
-# =========================
+# ==========================================
+# /PL - PLAY YOUTUBE
+# ==========================================
 
 @bot.tree.command(
     name="pl",
-    description="Phát nhạc từ đường link YouTube"
+    description="Phat nhac tu link YouTube"
 )
 @app_commands.describe(
-    link="Dán đường link bài nhạc YouTube"
+    link="Dan duong link bai nhac YouTube"
 )
-async def pl(interaction: discord.Interaction, link: str):
-
-    if interaction.guild is None:
-        await interaction.response.send_message(
-            "Lệnh này chỉ sử dụng trong máy chủ Discord.",
-            ephemeral=True
-        )
-        return
-
-    if not interaction.user.voice or not interaction.user.voice.channel:
-        await interaction.response.send_message(
-            "Bạn cần vào phòng thoại trước khi phát nhạc.",
-            ephemeral=True
-        )
-        return
-
+async def pl(
+    interaction: discord.Interaction,
+    link: str
+):
+    # Phai defer truoc khi xu ly tac vu lau
     await interaction.response.defer(thinking=True)
 
+    if interaction.guild is None:
+        await interaction.followup.send(
+            "Lenh nay chi dung trong may chu Discord.",
+            ephemeral=True
+        )
+        return
+
+    if not interaction.user.voice:
+        await interaction.followup.send(
+            "Ban can vao phong thoai truoc.",
+            ephemeral=True
+        )
+        return
+
+    channel = interaction.user.voice.channel
+
     try:
-        channel = interaction.user.voice.channel
+        # Ket noi hoac chuyen phong thoai
         voice_client = interaction.guild.voice_client
 
-        # Tham gia hoặc chuyển phòng thoại
         if voice_client is None:
-            voice_client = await channel.connect()
+            voice_client = await asyncio.wait_for(
+                channel.connect(timeout=15, reconnect=True),
+                timeout=20
+            )
         elif voice_client.channel != channel:
-            await voice_client.move_to(channel)
+            await asyncio.wait_for(
+                voice_client.move_to(channel),
+                timeout=15
+            )
 
-        # Lấy thông tin âm thanh từ YouTube
+        # Lay thong tin YouTube trong thread rieng
         def extract_audio():
             options = {
                 "format": "bestaudio/best",
                 "quiet": True,
                 "no_warnings": True,
                 "noplaylist": True,
+                "socket_timeout": 12,
+                "retries": 1,
+                "extractor_retries": 1,
             }
 
             with yt_dlp.YoutubeDL(options) as ydl:
                 return ydl.extract_info(link, download=False)
 
-        info = await asyncio.to_thread(extract_audio)
+        info = await asyncio.wait_for(
+            asyncio.to_thread(extract_audio),
+            timeout=30
+        )
 
         audio_url = info.get("url")
-        title = info.get("title", "Không rõ tên bài")
+        title = info.get("title", "Khong ro ten bai")
 
         if not audio_url:
-            raise RuntimeError("Không lấy được đường dẫn âm thanh.")
+            raise RuntimeError(
+                "Khong lay duoc duong dan am thanh."
+            )
 
-        # Dừng bài hiện tại nếu đang phát
-        if voice_client.is_playing() or voice_client.is_paused():
-            voice_client.stop()
-
-        # Phát nhạc bằng FFmpeg
+        # Tao nguon am thanh
         source = discord.FFmpegPCMAudio(
             audio_url,
             before_options=(
@@ -141,69 +164,52 @@ async def pl(interaction: discord.Interaction, link: str):
             options="-vn"
         )
 
+        # Dung bai cu neu dang phat
+        if (
+            voice_client.is_playing()
+            or voice_client.is_paused()
+        ):
+            voice_client.stop()
+
         voice_client.play(source)
 
         await interaction.followup.send(
-            f"🎵 Đang phát: **{title}**"
+            f"🎵 Dang phat: **{title}**"
+        )
+
+    except asyncio.TimeoutError:
+        print("Loi /pl: het thoi gian cho.")
+
+        await interaction.followup.send(
+            "⏱️ Tai nhac hoac ket noi qua lau. "
+            "Hay thu lai sau."
         )
 
     except Exception as error:
         print(
-            f"Lỗi /pl: {type(error).__name__}: {error}"
+            f"Loi /pl: {type(error).__name__}: {error}"
         )
 
         await interaction.followup.send(
-            f"❌ Không phát được nhạc: "
+            f"❌ Loi phat nhac: "
             f"`{type(error).__name__}: {error}`"
         )
 
 
-# =========================
-# LỆNH /STOP
-# =========================
+# ==========================================
+# /STOP - STOP MUSIC
+# ==========================================
 
 @bot.tree.command(
     name="stop",
-    description="Dừng phát nhạc"
+    description="Dung phat nhac"
 )
 async def stop(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
 
     if interaction.guild is None:
-        await interaction.response.send_message(
-            "Lệnh này chỉ sử dụng trong máy chủ.",
-            ephemeral=True
-        )
-        return
-
-    voice_client = interaction.guild.voice_client
-
-    if voice_client and (
-        voice_client.is_playing() or voice_client.is_paused()
-    ):
-        voice_client.stop()
-        await interaction.response.send_message(
-            "⏹️ Đã dừng nhạc."
-        )
-    else:
-        await interaction.response.send_message(
-            "Hiện không có nhạc đang phát.",
-            ephemeral=True
-        )
-
-
-# =========================
-# LỆNH /LEAVE
-# =========================
-
-@bot.tree.command(
-    name="leave",
-    description="Cho bot rời phòng thoại"
-)
-async def leave(interaction: discord.Interaction):
-
-    if interaction.guild is None:
-        await interaction.response.send_message(
-            "Lệnh này chỉ sử dụng trong máy chủ.",
+        await interaction.followup.send(
+            "Lenh nay chi dung trong may chu Discord.",
             ephemeral=True
         )
         return
@@ -211,30 +217,90 @@ async def leave(interaction: discord.Interaction):
     voice_client = interaction.guild.voice_client
 
     if voice_client is None:
-        await interaction.response.send_message(
-            "Bot hiện không ở trong phòng thoại.",
+        await interaction.followup.send(
+            "Bot khong o trong phong thoai.",
             ephemeral=True
         )
         return
 
-    if voice_client.is_playing() or voice_client.is_paused():
+    if (
+        voice_client.is_playing()
+        or voice_client.is_paused()
+    ):
         voice_client.stop()
 
-    await voice_client.disconnect()
+        await interaction.followup.send(
+            "⏹️ Da dung nhac."
+        )
+    else:
+        await interaction.followup.send(
+            "Hien khong co nhac dang phat.",
+            ephemeral=True
+        )
 
-    await interaction.response.send_message(
-        "👋 League Ultra Dino đã rời phòng thoại."
-    )
+
+# ==========================================
+# /LEAVE - LEAVE VOICE CHANNEL
+# ==========================================
+
+@bot.tree.command(
+    name="leave",
+    description="Cho bot roi phong thoai"
+)
+async def leave(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
+
+    if interaction.guild is None:
+        await interaction.followup.send(
+            "Lenh nay chi dung trong may chu Discord.",
+            ephemeral=True
+        )
+        return
+
+    voice_client = interaction.guild.voice_client
+
+    if voice_client is None:
+        await interaction.followup.send(
+            "Bot khong o trong phong thoai.",
+            ephemeral=True
+        )
+        return
+
+    try:
+        if (
+            voice_client.is_playing()
+            or voice_client.is_paused()
+        ):
+            voice_client.stop()
+
+        await asyncio.wait_for(
+            voice_client.disconnect(force=True),
+            timeout=10
+        )
+
+        await interaction.followup.send(
+            "👋 League Ultra Dino da roi phong thoai."
+        )
+
+    except Exception as error:
+        print(
+            f"Loi /leave: {type(error).__name__}: {error}"
+        )
+
+        await interaction.followup.send(
+            f"Khong the roi phong: "
+            f"`{type(error).__name__}: {error}`"
+        )
 
 
-# =========================
-# CHẠY BOT
-# =========================
+# ==========================================
+# START BOT
+# ==========================================
 
 if not TOKEN:
     raise RuntimeError(
-        "Không tìm thấy token. Hãy đặt DISCORD_TOKEN "
-        "trong Environment Variables."
+        "Khong tim thay token. "
+        "Hay dat DISCORD_TOKEN trong FadeHost."
     )
 
 bot.run(TOKEN)
