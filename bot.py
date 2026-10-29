@@ -1,4 +1,4 @@
-
+```python
 import os
 import asyncio
 import discord
@@ -18,6 +18,7 @@ GUILD_ID = os.getenv("GUILD_ID")
 if not TOKEN:
     raise RuntimeError("Thieu DISCORD_TOKEN trong FadeHost.")
 
+
 class LeagueUltraDino(discord.Client):
     def __init__(self):
         super().__init__(intents=discord.Intents.default())
@@ -35,6 +36,7 @@ class LeagueUltraDino(discord.Client):
 
     async def on_ready(self):
         print(f"Bot online: {self.user}")
+
 
 bot = LeagueUltraDino()
 
@@ -55,7 +57,9 @@ async def speak(interaction: discord.Interaction, text: str):
     await interaction.response.defer(thinking=True)
 
     if not text.strip():
-        await interaction.followup.send("Ban chua nhap noi dung.")
+        await interaction.followup.send(
+            "Ban chua nhap noi dung."
+        )
         return
 
     if len(text) > 300:
@@ -74,12 +78,23 @@ async def speak(interaction: discord.Interaction, text: str):
 
     channel = member.voice.channel
     voice_client = interaction.guild.voice_client
+    filename = None
 
     try:
         if voice_client is None:
-            voice_client = await channel.connect(timeout=20)
+            voice_client = await channel.connect(
+                timeout=20,
+                self_deaf=True
+            )
         elif voice_client.channel != channel:
             await voice_client.move_to(channel)
+
+        # Tu deafen bot, ke ca khi bot da ket noi san
+        await interaction.guild.change_voice_state(
+            channel=voice_client.channel,
+            self_deaf=True,
+            self_mute=False
+        )
 
         if voice_client.is_playing():
             voice_client.stop()
@@ -105,13 +120,23 @@ async def speak(interaction: discord.Interaction, text: str):
         )
 
     except Exception as error:
+        if filename and os.path.exists(filename):
+            try:
+                os.remove(filename)
+            except OSError:
+                pass
+
         print(f"Loi /n: {type(error).__name__}: {error}")
+
         await interaction.followup.send(
             f"Khong doc duoc: `{type(error).__name__}: {error}`"
         )
 
 
-@bot.tree.command(name="stop", description="Dung giong doc")
+@bot.tree.command(
+    name="stop",
+    description="Dung giong doc"
+)
 @app_commands.guild_only()
 async def stop(interaction: discord.Interaction):
     voice_client = interaction.guild.voice_client
@@ -120,14 +145,19 @@ async def stop(interaction: discord.Interaction):
         voice_client.is_playing() or voice_client.is_paused()
     ):
         voice_client.stop()
-        await interaction.response.send_message("Da dung giong doc.")
+        await interaction.response.send_message(
+            "Da dung giong doc."
+        )
     else:
         await interaction.response.send_message(
             "Bot khong dang doc gi ca."
         )
 
 
-@bot.tree.command(name="leave", description="Cho bot roi phong thoai")
+@bot.tree.command(
+    name="leave",
+    description="Cho bot roi phong thoai"
+)
 @app_commands.guild_only()
 async def leave(interaction: discord.Interaction):
     voice_client = interaction.guild.voice_client
@@ -138,10 +168,11 @@ async def leave(interaction: discord.Interaction):
         )
         return
 
-    if voice_client.is_playing():
+    if voice_client.is_playing() or voice_client.is_paused():
         voice_client.stop()
 
     await voice_client.disconnect(force=True)
+
     await interaction.response.send_message(
         "Bot da roi phong thoai."
     )
@@ -149,3 +180,4 @@ async def leave(interaction: discord.Interaction):
 
 print("Dang khoi dong League Ultra Dino...")
 bot.run(TOKEN)
+```
