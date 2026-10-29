@@ -22,9 +22,12 @@ if not TOKEN:
 
 
 # =========================
-# CAU HINH PROXY (SUA DONG NAY NEU PROXY CHET)
+# CAU HINH POT PROVIDER (PRIVATE NETWORK)
 # =========================
-PROXY_URL = "http://8.219.97.248:80"
+# Thay "bot-xxxxx" bang ten private network that cua app bgutil tren FadeHost.
+# FadeHost gan ten dang "bot-<id>" cho moi bot/app tren private network.
+POT_PROVIDER_URL = "http://bot-bgutil:4416"
+
 
 # =========================
 # YT-DLP CONFIG
@@ -34,23 +37,26 @@ COOKIE_FILE = "cookies.txt"
 YTDL_OPTS = {
     "format": "bestaudio/best",
     "noplaylist": True,
-    "playlist_items": "1",       # Ep chi lay 1 bai dau tien
+    "playlist_items": "1",
     "quiet": True,
     "no_warnings": True,
     "default_search": "ytsearch1",
     "source_address": "0.0.0.0",
-    "socket_timeout": 15,        # Timeout 15s tranh treo bot
+    "socket_timeout": 20,
     "extractor_args": {
         "youtube": {
-            "player_client": ["mweb", "tv", "web_safari"],
-        }
+            # BAT BUOC: mweb/tv moi kich hoat POT flow [citation:19]
+            "player_client": ["mweb", "tv"],
+            # Ep yt-dlp luon lay POT tu provider
+            "fetch_pot": ["always"],
+        },
+        "youtubepot-bgutilhttp": {
+            "base_url": [POT_PROVIDER_URL],
+        },
     },
     "geo_bypass": True,
     "nocheckcertificate": True,
 }
-
-if PROXY_URL.strip():
-    YTDL_OPTS["proxy"] = PROXY_URL.strip()
 
 if os.path.exists(COOKIE_FILE):
     YTDL_OPTS["cookiefile"] = COOKIE_FILE
@@ -109,7 +115,6 @@ def is_url(text: str) -> bool:
     return text.startswith("http://") or text.startswith("https://")
 
 def clean_youtube_url(url: str) -> str:
-    """Boc tach link de chi lay video ID, bo qua playlist."""
     parsed = urlparse(url)
     if "youtube.com" in parsed.netloc or "music.youtube.com" in parsed.netloc:
         if parsed.path == "/watch":
@@ -131,7 +136,7 @@ def resolve_query(query: str):
 
         clean_url = clean_youtube_url(query)
         print(f"[YT-DLP] Dang lay thong tin video: {clean_url}")
-        
+
         with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
             info = ydl.extract_info(clean_url, download=False)
 
@@ -140,7 +145,6 @@ def resolve_query(query: str):
 
         return info.get("webpage_url"), info.get("title", "Unknown")
 
-    # Neu la tu khoa
     print(f"[YT-DLP] Dang tim kiem tu khoa: {query}")
     with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
         info = ydl.extract_info(f"ytsearch1:{query}", download=False)
@@ -190,8 +194,7 @@ class LeagueUltraDino(discord.Client):
             print(f"Da nap cookie: {COOKIE_FILE}")
         else:
             print("Khong tim thay cookies.txt - se chay khong cookie.")
-        if PROXY_URL.strip():
-            print(f"Da cau hinh proxy: {PROXY_URL}")
+        print(f"POT provider: {POT_PROVIDER_URL}")
 
 
 bot = LeagueUltraDino()
@@ -216,8 +219,7 @@ async def play_next(guild: discord.Guild, player: MusicPlayer):
 
     try:
         stream_url, title = await asyncio.to_thread(get_stream_url, song["url"])
-        
-        # Su dung FFmpeg de phat
+
         source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTS)
 
         def after_play(error):
@@ -225,9 +227,8 @@ async def play_next(guild: discord.Guild, player: MusicPlayer):
                 print(f"[FFMPEG ERROR] Loi trong qua trinh phat: {error}")
             else:
                 print(f"[PLAY] Phat xong bai: {title}")
-            
+
             player.is_playing = False
-            # Tiep tuc bai tiep theo
             fut = asyncio.run_coroutine_threadsafe(
                 play_next(guild, player), bot.loop
             )
@@ -256,7 +257,6 @@ async def play_next(guild: discord.Guild, player: MusicPlayer):
                 )
             except Exception:
                 pass
-        # Thu phat bai tiep theo neu bai nay loi
         player.is_playing = False
         await play_next(guild, player)
 
@@ -344,7 +344,7 @@ async def play(interaction: discord.Interaction, query: str):
 async def skip(interaction: discord.Interaction):
     vc = interaction.guild.voice_client
     if vc and (vc.is_playing() or vc.is_paused()):
-        vc.stop() 
+        vc.stop()
         await interaction.response.send_message("⏭️ Da bo qua bai hien tai.")
     else:
         await interaction.response.send_message("Bot khong dang phat nhac.")
