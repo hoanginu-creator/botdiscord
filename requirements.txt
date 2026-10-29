@@ -1,2 +1,1 @@
-discord.py[voice]
-yt-dlp[default]
+discord.py
