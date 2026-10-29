@@ -21,6 +21,11 @@ if not TOKEN:
 
 
 # =========================
+# CAU HINH PROXY (SUA DONG NAY NEU PROXY CHET)
+# =========================
+PROXY_URL = "http://8.219.97.248:80"
+
+# =========================
 # YT-DLP CONFIG
 # =========================
 COOKIE_FILE = "cookies.txt"
@@ -33,7 +38,7 @@ YTDL_OPTS = {
     "no_warnings": True,
     "default_search": "ytsearch1",
     "source_address": "0.0.0.0",
-    "socket_timeout": 20,        # Timeout 20s tranh treo bot
+    "socket_timeout": 15,        # Timeout 15s tranh treo bot
     "extractor_args": {
         "youtube": {
             "player_client": ["mweb", "tv", "web_safari"],
@@ -42,6 +47,10 @@ YTDL_OPTS = {
     "geo_bypass": True,
     "nocheckcertificate": True,
 }
+
+# Neu co proxy thi them vao
+if PROXY_URL.strip():
+    YTDL_OPTS["proxy"] = PROXY_URL.strip()
 
 if os.path.exists(COOKIE_FILE):
     YTDL_OPTS["cookiefile"] = COOKIE_FILE
@@ -178,6 +187,9 @@ class LeagueUltraDino(discord.Client):
             print(f"Da nap cookie: {COOKIE_FILE}")
         else:
             print("Khong tim thay cookies.txt - se chay khong cookie.")
+        if PROXY_URL.strip():
+            print(f"Da cau hinh proxy: {PROXY_URL}")
+
 
 bot = LeagueUltraDino()
 
