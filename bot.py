@@ -1,6 +1,7 @@
 import os
 import re
 import asyncio
+from urllib.parse import urlparse, parse_qs
 
 import discord
 import yt_dlp
@@ -33,7 +34,7 @@ COOKIE_FILE = "cookies.txt"
 YTDL_OPTS = {
     "format": "bestaudio/best",
     "noplaylist": True,
-    "playlist_items": "1",       # Ep chi lay 1 bai dau tien ke ca khi dan link playlist
+    "playlist_items": "1",       # Ep chi lay 1 bai dau tien
     "quiet": True,
     "no_warnings": True,
     "default_search": "ytsearch1",
@@ -48,7 +49,6 @@ YTDL_OPTS = {
     "nocheckcertificate": True,
 }
 
-# Neu co proxy thi them vao
 if PROXY_URL.strip():
     YTDL_OPTS["proxy"] = PROXY_URL.strip()
 
@@ -108,6 +108,20 @@ def get_player(guild_id: int) -> MusicPlayer:
 def is_url(text: str) -> bool:
     return text.startswith("http://") or text.startswith("https://")
 
+def clean_youtube_url(url: str) -> str:
+    """Boc tach link de chi lay video ID, bo qua playlist."""
+    parsed = urlparse(url)
+    if "youtube.com" in parsed.netloc or "music.youtube.com" in parsed.netloc:
+        if parsed.path == "/watch":
+            video_id = parse_qs(parsed.query).get("v")
+            if video_id:
+                return f"https://www.youtube.com/watch?v={video_id[0]}"
+    elif "youtu.be" in parsed.netloc:
+        video_id = parsed.path.lstrip("/")
+        if video_id:
+            return f"https://www.youtube.com/watch?v={video_id}"
+    return url
+
 def resolve_query(query: str):
     query = query.strip()
 
@@ -115,23 +129,18 @@ def resolve_query(query: str):
         if not YOUTUBE_URL_RE.match(query):
             raise ValueError("Chi ho tro link YouTube (youtube.com / youtu.be).")
 
-        print(f"[YT-DLP] Dang lay thong tin bai hat: {query}")
+        clean_url = clean_youtube_url(query)
+        print(f"[YT-DLP] Dang lay thong tin video: {clean_url}")
+        
         with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
-            info = ydl.extract_info(query, download=False)
+            info = ydl.extract_info(clean_url, download=False)
 
         if not info:
             return None, None
 
-        if info.get("_type") == "playlist":
-            entries = info.get("entries") or []
-            if not entries:
-                return None, None
-            entry = entries[0]
-        else:
-            entry = info
+        return info.get("webpage_url"), info.get("title", "Unknown")
 
-        return entry.get("webpage_url"), entry.get("title", "Unknown")
-
+    # Neu la tu khoa
     print(f"[YT-DLP] Dang tim kiem tu khoa: {query}")
     with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
         info = ydl.extract_info(f"ytsearch1:{query}", download=False)
@@ -149,12 +158,6 @@ def get_stream_url(url: str):
 
     if not info:
         raise RuntimeError("Khong lay duoc thong tin stream.")
-    
-    if info.get("_type") == "playlist":
-        entries = info.get("entries") or []
-        if not entries:
-            raise RuntimeError("Playlist rong.")
-        info = entries[0]
 
     stream_url = info.get("url")
     if not stream_url:
@@ -341,7 +344,7 @@ async def play(interaction: discord.Interaction, query: str):
 async def skip(interaction: discord.Interaction):
     vc = interaction.guild.voice_client
     if vc and (vc.is_playing() or vc.is_paused()):
-        vc.stop()  # after_play se kich hoat bai tiep theo
+        vc.stop() 
         await interaction.response.send_message("⏭️ Da bo qua bai hien tai.")
     else:
         await interaction.response.send_message("Bot khong dang phat nhac.")
