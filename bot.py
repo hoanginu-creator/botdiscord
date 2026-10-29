@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 
 import discord
@@ -36,16 +37,22 @@ FFMPEG_OPTS = {
     "options": "-vn",
 }
 
+YOUTUBE_URL_RE = re.compile(
+    r"^(https?://)?(www\.)?"
+    r"(youtube\.com|youtu\.be|music\.youtube\.com)/",
+    re.IGNORECASE,
+)
+
 
 # =========================
 # MUSIC PLAYER (per guild)
 # =========================
 class MusicPlayer:
     def __init__(self):
-        self.queue = []          # list[{url, title}]
-        self.current = None      # dict {url, title}
+        self.queue = []           # list[{url, title}]
+        self.current = None       # dict {url, title}
         self.voice_client = None
-        self.text_channel = None # de gui thong bao khi auto-next
+        self.text_channel = None  # de gui thong bao khi auto-next
 
     def add(self, url, title):
         self.queue.append({"url": url, "title": title})
@@ -74,13 +81,43 @@ def get_player(guild_id: int) -> MusicPlayer:
 # =========================
 # YOUTUBE HELPERS
 # =========================
-def search_youtube(query: str):
-    """Tim kiem YouTube, tra ve (url, title)."""
+def is_url(text: str) -> bool:
+    return text.startswith("http://") or text.startswith("https://")
+
+
+def resolve_query(query: str):
+    """
+    - Neu query la URL YouTube -> extract truc tiep.
+    - Neu la tu khoa -> ytsearch1.
+    Tra ve (url, title) hoac (None, None) neu loi.
+    Raise ValueError neu link khong phai YouTube.
+    """
+    query = query.strip()
+
+    if is_url(query):
+        if not YOUTUBE_URL_RE.match(query):
+            raise ValueError("Chi ho tro link YouTube (youtube.com / youtu.be).")
+
+        with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
+            info = ydl.extract_info(query, download=False)
+
+        if info.get("_type") == "playlist":
+            entries = info.get("entries") or []
+            if not entries:
+                return None, None
+            entry = entries[0]
+        else:
+            entry = info
+
+        return entry["webpage_url"], entry.get("title", "Unknown")
+
     with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
         info = ydl.extract_info(f"ytsearch1:{query}", download=False)
-        if info and info.get("entries"):
-            entry = info["entries"][0]
-            return entry["webpage_url"], entry["title"]
+
+    if info and info.get("entries"):
+        entry = info["entries"][0]
+        return entry["webpage_url"], entry["title"]
+
     return None, None
 
 
@@ -135,7 +172,6 @@ async def play_next(guild: discord.Guild, player: MusicPlayer):
         def after_play(error):
             if error:
                 print(f"Loi phat nhac: {error}")
-            # Tiep tuc bai ke tiep
             fut = asyncio.run_coroutine_threadsafe(
                 play_next(guild, player), bot.loop
             )
@@ -163,7 +199,6 @@ async def play_next(guild: discord.Guild, player: MusicPlayer):
                 )
             except Exception:
                 pass
-        # Thu bai tiep theo
         await play_next(guild, player)
 
 
@@ -197,37 +232,47 @@ async def ensure_voice(interaction: discord.Interaction):
 # =========================
 # SLASH COMMANDS
 # =========================
-@bot.tree.command(name="play", description="Phat nhac tu YouTube")
-@app_commands.describe(query="Ten bai hat hoac link YouTube")
+@bot.tree.command(name="play", description="Phat nhac tu YouTube (link hoac ten bai)")
+@app_commands.describe(query="Link YouTube hoac ten bai hat")
 @app_commands.guild_only()
 async def play(interaction: discord.Interaction, query: str):
     await interaction.response.defer(thinking=True)
+
+    query = query.strip()
+    if not query:
+        await interaction.followup.send("Ban chua nhap link hoac ten bai.")
+        return
 
     vc, player = await ensure_voice(interaction)
     if vc is None:
         return
 
     try:
-        url, title = await asyncio.to_thread(search_youtube, query)
+        url, title = await asyncio.to_thread(resolve_query, query)
+    except ValueError as error:
+        await interaction.followup.send(f"❌ {error}")
+        return
     except Exception as error:
         await interaction.followup.send(
-            f"Khong tim thay bai hat: `{type(error).__name__}: {error}`"
+            f"❌ Khong lay duoc thong tin bai hat: `{type(error).__name__}: {error}`"
         )
         return
 
     if not url:
-        await interaction.followup.send("Khong tim thay bai hat.")
+        await interaction.followup.send("❌ Khong tim thay bai hat.")
         return
 
     player.add(url, title)
 
     if vc.is_playing() or vc.is_paused():
         await interaction.followup.send(
-            f"➕ Da them vao hang doi: **{discord.utils.escape_markdown(title)}**"
+            f"➕ Da them vao hang doi: **{discord.utils.escape_markdown(title)}**\n"
+            f"🔗 {url}"
         )
     else:
         await interaction.followup.send(
-            f"⏳ Dang chuan bi phat: **{discord.utils.escape_markdown(title)}**"
+            f"⏳ Dang chuan bi phat: **{discord.utils.escape_markdown(title)}**\n"
+            f"🔗 {url}"
         )
         await play_next(interaction.guild, player)
 
@@ -237,7 +282,7 @@ async def play(interaction: discord.Interaction, query: str):
 async def skip(interaction: discord.Interaction):
     vc = interaction.guild.voice_client
     if vc and (vc.is_playing() or vc.is_paused()):
-        vc.stop()  # after_play se tu goi bai tiep
+        vc.stop()
         await interaction.response.send_message("⏭️ Da bo qua bai hien tai.")
     else:
         await interaction.response.send_message("Bot khong dang phat nhac.")
