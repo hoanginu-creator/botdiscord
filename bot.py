@@ -34,7 +34,8 @@ YTDL_OPTS = {
     "source_address": "0.0.0.0",
     "extractor_args": {
         "youtube": {
-            "player_client": ["android", "web_safari"],
+            # Doi sang mweb/tv de de lay stream hon
+            "player_client": ["mweb", "tv", "web_safari"],
         }
     },
     "geo_bypass": True,
@@ -111,8 +112,13 @@ def resolve_query(query: str):
         if not YOUTUBE_URL_RE.match(query):
             raise ValueError("Chi ho tro link YouTube (youtube.com / youtu.be).")
 
-        with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
-            info = ydl.extract_info(query, download=False)
+        try:
+            print(f"[YT-DLP] Dang extract URL: {query}")
+            with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
+                info = ydl.extract_info(query, download=False)
+        except Exception as e:
+            print(f"[YT-DLP ERROR] {type(e).__name__}: {e}")
+            raise
 
         if info is None:
             return None, None
@@ -127,8 +133,13 @@ def resolve_query(query: str):
 
         return entry.get("webpage_url"), entry.get("title", "Unknown")
 
-    with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
-        info = ydl.extract_info(f"ytsearch1:{query}", download=False)
+    try:
+        print(f"[YT-DLP] Dang tim kiem tu khoa: {query}")
+        with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
+            info = ydl.extract_info(f"ytsearch1:{query}", download=False)
+    except Exception as e:
+        print(f"[YT-DLP ERROR] {type(e).__name__}: {e}")
+        raise
 
     if info and info.get("entries"):
         entry = info["entries"][0]
@@ -139,16 +150,28 @@ def resolve_query(query: str):
 
 def get_stream_url(url: str):
     """Lay stream URL truc tiep tu YouTube."""
-    with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
-        info = ydl.extract_info(url, download=False)
-        if info is None:
-            raise RuntimeError("Khong lay duoc thong tin stream.")
-        if info.get("_type") == "playlist":
-            entries = info.get("entries") or []
-            if not entries:
-                raise RuntimeError("Playlist rong.")
-            info = entries[0]
-        return info["url"], info.get("title", "Unknown")
+    try:
+        print(f"[YT-DLP] Dang lay stream URL cho: {url}")
+        with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        print(f"[YT-DLP STREAM ERROR] {type(e).__name__}: {e}")
+        raise
+
+    if info is None:
+        raise RuntimeError("Khong lay duoc thong tin stream.")
+    if info.get("_type") == "playlist":
+        entries = info.get("entries") or []
+        if not entries:
+            raise RuntimeError("Playlist rong.")
+        info = entries[0]
+
+    stream_url = info.get("url")
+    if not stream_url:
+        raise RuntimeError("Khong tim thay truong 'url' trong info.")
+
+    print(f"[YT-DLP] Da lay stream URL thanh cong (dai {len(stream_url)} ky tu).")
+    return stream_url, info.get("title", "Unknown")
 
 
 # =========================
@@ -186,28 +209,38 @@ async def play_next(guild: discord.Guild, player: MusicPlayer):
     """Phat bai tiep theo trong queue."""
     vc = player.voice_client
     if vc is None or not vc.is_connected():
+        print("[PLAY] Voice client khong ket noi, huy phat.")
         return
 
     song = player.next()
     if song is None:
+        print("[PLAY] Hang doi rong.")
         return
 
+    print(f"[PLAY] Bat dau phat: {song['title']}")
     try:
         stream_url, title = await asyncio.to_thread(get_stream_url, song["url"])
+        print(f"[PLAY] Da lay duoc stream, chuan bi goi FFmpeg.")
+        
         source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTS)
 
         def after_play(error):
             if error:
-                print(f"Loi phat nhac: {error}")
+                print(f"[FFMPEG ERROR] Loi trong qua trinh phat: {error}")
+            else:
+                print(f"[PLAY] Phat xong bai: {title}")
+            
+            # Chuyen bai tiep theo
             fut = asyncio.run_coroutine_threadsafe(
                 play_next(guild, player), bot.loop
             )
             try:
                 fut.result(timeout=5)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[PLAY] Loi chuyen bai: {e}")
 
         vc.play(source, after=after_play)
+        print(f"[PLAY] Lenh vc.play() da duoc goi.")
 
         if player.text_channel:
             try:
@@ -218,7 +251,7 @@ async def play_next(guild: discord.Guild, player: MusicPlayer):
                 pass
 
     except Exception as error:
-        print(f"Loi play_next: {type(error).__name__}: {error}")
+        print(f"[PLAY ERROR] {type(error).__name__}: {error}")
         if player.text_channel:
             try:
                 await player.text_channel.send(
@@ -226,6 +259,7 @@ async def play_next(guild: discord.Guild, player: MusicPlayer):
                 )
             except Exception:
                 pass
+        # Thu phat bai tiep theo neu bai nay loi
         await play_next(guild, player)
 
 
@@ -241,10 +275,13 @@ async def ensure_voice(interaction: discord.Interaction):
 
     try:
         if vc is None:
+            print(f"[VOICE] Dang ket noi vao kenh: {channel.name}")
             vc = await channel.connect(timeout=20, self_deaf=True)
         elif vc.channel != channel:
+            print(f"[VOICE] Dang di chuyen sang kenh: {channel.name}")
             await vc.move_to(channel)
     except Exception as error:
+        print(f"[VOICE ERROR] {type(error).__name__}: {error}")
         await interaction.followup.send(
             f"Khong vao duoc phong thoai: `{type(error).__name__}: {error}`"
         )
@@ -275,6 +312,7 @@ async def play(interaction: discord.Interaction, query: str):
         return
 
     try:
+        print(f"[/play] Nhan yeu cau: {query}")
         url, title = await asyncio.to_thread(resolve_query, query)
     except ValueError as error:
         await interaction.followup.send(f"❌ {error}")
@@ -289,6 +327,7 @@ async def play(interaction: discord.Interaction, query: str):
         await interaction.followup.send("❌ Khong tim thay bai hat.")
         return
 
+    print(f"[/play] Tim thay bai: {title} ({url})")
     player.add(url, title)
 
     if vc.is_playing() or vc.is_paused():
