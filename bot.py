@@ -28,13 +28,14 @@ COOKIE_FILE = "cookies.txt"
 YTDL_OPTS = {
     "format": "bestaudio/best",
     "noplaylist": True,
+    "playlist_items": "1",       # Ep chi lay 1 bai dau tien ke ca khi dan link playlist
     "quiet": True,
     "no_warnings": True,
     "default_search": "ytsearch1",
     "source_address": "0.0.0.0",
+    "socket_timeout": 20,        # Timeout 20s tranh treo bot
     "extractor_args": {
         "youtube": {
-            # Doi sang mweb/tv de de lay stream hon
             "player_client": ["mweb", "tv", "web_safari"],
         }
     },
@@ -42,7 +43,6 @@ YTDL_OPTS = {
     "nocheckcertificate": True,
 }
 
-# Chi them cookiefile neu file ton tai (tranh loi khi chua upload)
 if os.path.exists(COOKIE_FILE):
     YTDL_OPTS["cookiefile"] = COOKIE_FILE
 
@@ -63,10 +63,11 @@ YOUTUBE_URL_RE = re.compile(
 # =========================
 class MusicPlayer:
     def __init__(self):
-        self.queue = []           # list[{url, title}]
-        self.current = None       # dict {url, title}
+        self.queue = []
         self.voice_client = None
-        self.text_channel = None  # de gui thong bao khi auto-next
+        self.text_channel = None
+        self.is_playing = False
+        self.current = None
 
     def add(self, url, title):
         self.queue.append({"url": url, "title": title})
@@ -81,10 +82,10 @@ class MusicPlayer:
     def clear(self):
         self.queue.clear()
         self.current = None
+        self.is_playing = False
 
 
 music_players: dict[int, MusicPlayer] = {}
-
 
 def get_player(guild_id: int) -> MusicPlayer:
     if guild_id not in music_players:
@@ -98,29 +99,18 @@ def get_player(guild_id: int) -> MusicPlayer:
 def is_url(text: str) -> bool:
     return text.startswith("http://") or text.startswith("https://")
 
-
 def resolve_query(query: str):
-    """
-    - Neu query la URL YouTube -> extract truc tiep.
-    - Neu la tu khoa -> ytsearch1.
-    Tra ve (url, title) hoac (None, None) neu loi.
-    Raise ValueError neu link khong phai YouTube.
-    """
     query = query.strip()
 
     if is_url(query):
         if not YOUTUBE_URL_RE.match(query):
             raise ValueError("Chi ho tro link YouTube (youtube.com / youtu.be).")
 
-        try:
-            print(f"[YT-DLP] Dang extract URL: {query}")
-            with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
-                info = ydl.extract_info(query, download=False)
-        except Exception as e:
-            print(f"[YT-DLP ERROR] {type(e).__name__}: {e}")
-            raise
+        print(f"[YT-DLP] Dang lay thong tin bai hat: {query}")
+        with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
+            info = ydl.extract_info(query, download=False)
 
-        if info is None:
+        if not info:
             return None, None
 
         if info.get("_type") == "playlist":
@@ -133,13 +123,9 @@ def resolve_query(query: str):
 
         return entry.get("webpage_url"), entry.get("title", "Unknown")
 
-    try:
-        print(f"[YT-DLP] Dang tim kiem tu khoa: {query}")
-        with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
-            info = ydl.extract_info(f"ytsearch1:{query}", download=False)
-    except Exception as e:
-        print(f"[YT-DLP ERROR] {type(e).__name__}: {e}")
-        raise
+    print(f"[YT-DLP] Dang tim kiem tu khoa: {query}")
+    with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
+        info = ydl.extract_info(f"ytsearch1:{query}", download=False)
 
     if info and info.get("entries"):
         entry = info["entries"][0]
@@ -147,19 +133,14 @@ def resolve_query(query: str):
 
     return None, None
 
-
 def get_stream_url(url: str):
-    """Lay stream URL truc tiep tu YouTube."""
-    try:
-        print(f"[YT-DLP] Dang lay stream URL cho: {url}")
-        with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
-            info = ydl.extract_info(url, download=False)
-    except Exception as e:
-        print(f"[YT-DLP STREAM ERROR] {type(e).__name__}: {e}")
-        raise
+    print(f"[YT-DLP] Dang lay stream audio cho: {url}")
+    with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
+        info = ydl.extract_info(url, download=False)
 
-    if info is None:
+    if not info:
         raise RuntimeError("Khong lay duoc thong tin stream.")
+    
     if info.get("_type") == "playlist":
         entries = info.get("entries") or []
         if not entries:
@@ -170,7 +151,7 @@ def get_stream_url(url: str):
     if not stream_url:
         raise RuntimeError("Khong tim thay truong 'url' trong info.")
 
-    print(f"[YT-DLP] Da lay stream URL thanh cong (dai {len(stream_url)} ky tu).")
+    print(f"[YT-DLP] Da lay thanh cong stream URL.")
     return stream_url, info.get("title", "Unknown")
 
 
@@ -198,7 +179,6 @@ class LeagueUltraDino(discord.Client):
         else:
             print("Khong tim thay cookies.txt - se chay khong cookie.")
 
-
 bot = LeagueUltraDino()
 
 
@@ -206,22 +186,23 @@ bot = LeagueUltraDino()
 # CORE PLAY LOGIC
 # =========================
 async def play_next(guild: discord.Guild, player: MusicPlayer):
-    """Phat bai tiep theo trong queue."""
     vc = player.voice_client
     if vc is None or not vc.is_connected():
-        print("[PLAY] Voice client khong ket noi, huy phat.")
+        player.is_playing = False
         return
 
     song = player.next()
     if song is None:
-        print("[PLAY] Hang doi rong.")
+        player.is_playing = False
         return
 
-    print(f"[PLAY] Bat dau phat: {song['title']}")
+    player.is_playing = True
+    print(f"[PLAY] Dang xu ly bai: {song['title']}")
+
     try:
         stream_url, title = await asyncio.to_thread(get_stream_url, song["url"])
-        print(f"[PLAY] Da lay duoc stream, chuan bi goi FFmpeg.")
         
+        # Su dung FFmpeg de phat
         source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTS)
 
         def after_play(error):
@@ -230,7 +211,8 @@ async def play_next(guild: discord.Guild, player: MusicPlayer):
             else:
                 print(f"[PLAY] Phat xong bai: {title}")
             
-            # Chuyen bai tiep theo
+            player.is_playing = False
+            # Tiep tuc bai tiep theo
             fut = asyncio.run_coroutine_threadsafe(
                 play_next(guild, player), bot.loop
             )
@@ -240,7 +222,7 @@ async def play_next(guild: discord.Guild, player: MusicPlayer):
                 print(f"[PLAY] Loi chuyen bai: {e}")
 
         vc.play(source, after=after_play)
-        print(f"[PLAY] Lenh vc.play() da duoc goi.")
+        print(f"[PLAY] Da gui lenh phat toi Discord.")
 
         if player.text_channel:
             try:
@@ -260,11 +242,10 @@ async def play_next(guild: discord.Guild, player: MusicPlayer):
             except Exception:
                 pass
         # Thu phat bai tiep theo neu bai nay loi
+        player.is_playing = False
         await play_next(guild, player)
 
-
 async def ensure_voice(interaction: discord.Interaction):
-    """Dam bao bot ket noi voice cung kenh voi user. Tra ve (vc, player) hoac (None, None)."""
     member = interaction.guild.get_member(interaction.user.id)
     if member is None or member.voice is None or member.voice.channel is None:
         await interaction.followup.send("Hay vao phong thoai truoc.")
@@ -327,10 +308,10 @@ async def play(interaction: discord.Interaction, query: str):
         await interaction.followup.send("❌ Khong tim thay bai hat.")
         return
 
-    print(f"[/play] Tim thay bai: {title} ({url})")
+    print(f"[/play] Tim thay bai: {title}")
     player.add(url, title)
 
-    if vc.is_playing() or vc.is_paused():
+    if player.is_playing or vc.is_playing() or vc.is_paused():
         await interaction.followup.send(
             f"➕ Da them vao hang doi: **{discord.utils.escape_markdown(title)}**\n"
             f"🔗 {url}"
@@ -348,7 +329,7 @@ async def play(interaction: discord.Interaction, query: str):
 async def skip(interaction: discord.Interaction):
     vc = interaction.guild.voice_client
     if vc and (vc.is_playing() or vc.is_paused()):
-        vc.stop()
+        vc.stop()  # after_play se kich hoat bai tiep theo
         await interaction.response.send_message("⏭️ Da bo qua bai hien tai.")
     else:
         await interaction.response.send_message("Bot khong dang phat nhac.")
