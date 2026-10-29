@@ -179,4 +179,3 @@ async def leave(interaction: discord.Interaction):
 
 print("Dang khoi dong League Ultra Dino...")
 bot.run(TOKEN)
-```
