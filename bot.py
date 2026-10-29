@@ -23,6 +23,8 @@ if not TOKEN:
 # =========================
 # YT-DLP CONFIG
 # =========================
+COOKIE_FILE = "cookies.txt"
+
 YTDL_OPTS = {
     "format": "bestaudio/best",
     "noplaylist": True,
@@ -30,7 +32,18 @@ YTDL_OPTS = {
     "no_warnings": True,
     "default_search": "ytsearch1",
     "source_address": "0.0.0.0",
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android", "web_safari"],
+        }
+    },
+    "geo_bypass": True,
+    "nocheckcertificate": True,
 }
+
+# Chi them cookiefile neu file ton tai (tranh loi khi chua upload)
+if os.path.exists(COOKIE_FILE):
+    YTDL_OPTS["cookiefile"] = COOKIE_FILE
 
 FFMPEG_OPTS = {
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
@@ -101,6 +114,9 @@ def resolve_query(query: str):
         with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
             info = ydl.extract_info(query, download=False)
 
+        if info is None:
+            return None, None
+
         if info.get("_type") == "playlist":
             entries = info.get("entries") or []
             if not entries:
@@ -109,7 +125,7 @@ def resolve_query(query: str):
         else:
             entry = info
 
-        return entry["webpage_url"], entry.get("title", "Unknown")
+        return entry.get("webpage_url"), entry.get("title", "Unknown")
 
     with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
         info = ydl.extract_info(f"ytsearch1:{query}", download=False)
@@ -125,6 +141,13 @@ def get_stream_url(url: str):
     """Lay stream URL truc tiep tu YouTube."""
     with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
         info = ydl.extract_info(url, download=False)
+        if info is None:
+            raise RuntimeError("Khong lay duoc thong tin stream.")
+        if info.get("_type") == "playlist":
+            entries = info.get("entries") or []
+            if not entries:
+                raise RuntimeError("Playlist rong.")
+            info = entries[0]
         return info["url"], info.get("title", "Unknown")
 
 
@@ -147,6 +170,10 @@ class LeagueUltraDino(discord.Client):
 
     async def on_ready(self):
         print(f"Bot online: {self.user}")
+        if os.path.exists(COOKIE_FILE):
+            print(f"Da nap cookie: {COOKIE_FILE}")
+        else:
+            print("Khong tim thay cookies.txt - se chay khong cookie.")
 
 
 bot = LeagueUltraDino()
