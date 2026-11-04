@@ -29,7 +29,7 @@ if not TOKEN:
 # CẤU HÌNH KÊNH LOG
 # =========================
 # THAY ID NÀY BẰNG ID KÊNH LOG KILL DINO CỦA BẠN
-LOG_CHANNEL_ID = 123456789012345678  # <--- SỬA ID NÀY
+LOG_CHANNEL_ID = 1567394939317518507  # <--- SỬA ID NÀY
 
 # Biến toàn cục lưu ID tin nhắn log duy nhất
 LOG_MESSAGE_ID = None
