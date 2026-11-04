@@ -2,7 +2,6 @@ import os
 import discord
 from discord.ext import commands
 from discord import app_commands
-from dotenv import load_dotenv
 import datetime
 import logging
 
@@ -20,12 +19,11 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-# Load token từ file .env
-load_dotenv()
+# Lấy token từ biến môi trường (FadeHost)
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 if not TOKEN:
-    raise RuntimeError("Thiếu DISCORD_TOKEN trong file .env hoặc biến môi trường")
+    raise RuntimeError("Thiếu DISCORD_TOKEN trong biến môi trường của FadeHost")
 
 # =========================
 # CẤU HÌNH KÊNH LOG
@@ -47,12 +45,8 @@ class KillLogBot(discord.Client):
     async def setup_hook(self):
         # Đồng bộ lệnh Slash toàn cầu
         await self.tree.sync()
-        # Không in ra console để tránh log rác
-        # print("Bot đã sẵn sàng và đồng bộ lệnh Slash!")
 
     async def on_ready(self):
-        # Không in ra console
-        # print(f"Bot online: {self.user}")
         pass
 
 bot = KillLogBot()
@@ -125,7 +119,8 @@ class ServerSelectView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="HỖ TRỢ / KILL LOG", style=discord.ButtonStyle.primary, custom_id="btn_kill_log")
+    # ĐÃ ĐỔI TÊN NÚT THÀNH "LOG KILL"
+    @discord.ui.button(label="LOG KILL", style=discord.ButtonStyle.danger, custom_id="btn_kill_log")
     async def support_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("Vui lòng chọn Server và Dino bên dưới:", ephemeral=True, view=DinoSelectView())
 
@@ -188,8 +183,8 @@ class DinoTypeSelectView(discord.ui.View):
 async def setup_kill_log(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📋 HỆ THỐNG KILL LOG DINO",
-        description="Nhấn nút bên dưới để bắt đầu ghi nhận Kill Log.",
-        color=discord.Color.blue()
+        description="Nhấn nút **LOG KILL** bên dưới để bắt đầu ghi nhận.",
+        color=discord.Color.red()
     )
     embed.set_footer(text="League Ultra Dino")
     await interaction.response.send_message(embed=embed, view=ServerSelectView())
@@ -198,6 +193,4 @@ async def setup_kill_log(interaction: discord.Interaction):
 # CHẠY BOT
 # =========================
 if __name__ == "__main__":
-    # Ẩn log khởi động
-    # print("Đang khởi động Kill Log Bot...")
     bot.run(TOKEN)
