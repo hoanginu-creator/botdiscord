@@ -1,432 +1,191 @@
 import os
-import re
-import asyncio
-from urllib.parse import urlparse, parse_qs
-
 import discord
-import yt_dlp
-
+from discord.ext import commands
 from discord import app_commands
+from dotenv import load_dotenv
+import datetime
 
-TOKEN = (
-    os.getenv("DISCORD_TOKEN")
-    or os.getenv("DISCORD_BOT_TOKEN")
-    or os.getenv("BOT_TOKEN")
-    or os.getenv("TOKEN")
-)
-
-GUILD_ID = os.getenv("GUILD_ID")
+# Load token từ file .env
+load_dotenv()
+TOKEN = os.getenv("DISCORD_TOKEN")
 
 if not TOKEN:
-    raise RuntimeError("Thieu DISCORD_TOKEN trong FadeHost.")
-
-
-# =========================
-# CAU HINH POT PROVIDER (PRIVATE NETWORK)
-# =========================
-# Thay "bot-xxxxx" bang ten private network that cua app bgutil tren FadeHost.
-# FadeHost gan ten dang "bot-<id>" cho moi bot/app tren private network.
-POT_PROVIDER_URL = "http://bot-bgutil:4416"
-
+    raise RuntimeError("Thiếu DISCORD_TOKEN trong file .env")
 
 # =========================
-# YT-DLP CONFIG
+# CẤU HÌNH KÊNH LOG
 # =========================
-COOKIE_FILE = "cookies.txt"
+# Thay ID này bằng ID kênh bạn muốn bot gửi Log Kill Dino
+LOG_CHANNEL_ID = 123456789012345678  # <--- SỬA ID NÀY
 
-YTDL_OPTS = {
-    "format": "bestaudio/best",
-    "noplaylist": True,
-    "playlist_items": "1",
-    "quiet": True,
-    "no_warnings": True,
-    "default_search": "ytsearch1",
-    "source_address": "0.0.0.0",
-    "socket_timeout": 20,
-    "extractor_args": {
-        "youtube": {
-            # BAT BUOC: mweb/tv moi kich hoat POT flow [citation:19]
-            "player_client": ["mweb", "tv"],
-            # Ep yt-dlp luon lay POT tu provider
-            "fetch_pot": ["always"],
-        },
-        "youtubepot-bgutilhttp": {
-            "base_url": [POT_PROVIDER_URL],
-        },
-    },
-    "geo_bypass": True,
-    "nocheckcertificate": True,
-}
-
-if os.path.exists(COOKIE_FILE):
-    YTDL_OPTS["cookiefile"] = COOKIE_FILE
-
-FFMPEG_OPTS = {
-    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
-    "options": "-vn",
-}
-
-YOUTUBE_URL_RE = re.compile(
-    r"^(https?://)?(www\.)?"
-    r"(youtube\.com|youtu\.be|music\.youtube\.com)/",
-    re.IGNORECASE,
-)
-
+# Biến toàn cục lưu ID tin nhắn log duy nhất
+LOG_MESSAGE_ID = None
 
 # =========================
-# MUSIC PLAYER (per guild)
+# KHỞI TẠO BOT
 # =========================
-class MusicPlayer:
-    def __init__(self):
-        self.queue = []
-        self.voice_client = None
-        self.text_channel = None
-        self.is_playing = False
-        self.current = None
-
-    def add(self, url, title):
-        self.queue.append({"url": url, "title": title})
-
-    def next(self):
-        if self.queue:
-            self.current = self.queue.pop(0)
-            return self.current
-        self.current = None
-        return None
-
-    def clear(self):
-        self.queue.clear()
-        self.current = None
-        self.is_playing = False
-
-
-music_players: dict[int, MusicPlayer] = {}
-
-def get_player(guild_id: int) -> MusicPlayer:
-    if guild_id not in music_players:
-        music_players[guild_id] = MusicPlayer()
-    return music_players[guild_id]
-
-
-# =========================
-# YOUTUBE HELPERS
-# =========================
-def is_url(text: str) -> bool:
-    return text.startswith("http://") or text.startswith("https://")
-
-def clean_youtube_url(url: str) -> str:
-    parsed = urlparse(url)
-    if "youtube.com" in parsed.netloc or "music.youtube.com" in parsed.netloc:
-        if parsed.path == "/watch":
-            video_id = parse_qs(parsed.query).get("v")
-            if video_id:
-                return f"https://www.youtube.com/watch?v={video_id[0]}"
-    elif "youtu.be" in parsed.netloc:
-        video_id = parsed.path.lstrip("/")
-        if video_id:
-            return f"https://www.youtube.com/watch?v={video_id}"
-    return url
-
-def resolve_query(query: str):
-    query = query.strip()
-
-    if is_url(query):
-        if not YOUTUBE_URL_RE.match(query):
-            raise ValueError("Chi ho tro link YouTube (youtube.com / youtu.be).")
-
-        clean_url = clean_youtube_url(query)
-        print(f"[YT-DLP] Dang lay thong tin video: {clean_url}")
-
-        with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
-            info = ydl.extract_info(clean_url, download=False)
-
-        if not info:
-            return None, None
-
-        return info.get("webpage_url"), info.get("title", "Unknown")
-
-    print(f"[YT-DLP] Dang tim kiem tu khoa: {query}")
-    with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
-        info = ydl.extract_info(f"ytsearch1:{query}", download=False)
-
-    if info and info.get("entries"):
-        entry = info["entries"][0]
-        return entry["webpage_url"], entry["title"]
-
-    return None, None
-
-def get_stream_url(url: str):
-    print(f"[YT-DLP] Dang lay stream audio cho: {url}")
-    with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
-        info = ydl.extract_info(url, download=False)
-
-    if not info:
-        raise RuntimeError("Khong lay duoc thong tin stream.")
-
-    stream_url = info.get("url")
-    if not stream_url:
-        raise RuntimeError("Khong tim thay truong 'url' trong info.")
-
-    print(f"[YT-DLP] Da lay thanh cong stream URL.")
-    return stream_url, info.get("title", "Unknown")
-
-
-# =========================
-# BOT CLIENT
-# =========================
-class LeagueUltraDino(discord.Client):
+class KillLogBot(discord.Client):
     def __init__(self):
         super().__init__(intents=discord.Intents.default())
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
-        if GUILD_ID:
-            guild = discord.Object(id=int(GUILD_ID))
-            self.tree.copy_global_to(guild=guild)
-            synced = await self.tree.sync(guild=guild)
-        else:
-            synced = await self.tree.sync()
-        print(f"Da dong bo {len(synced)} lenh.")
+        await self.tree.sync()
+        print("Bot đã sẵn sàng và đồng bộ lệnh Slash!")
 
     async def on_ready(self):
         print(f"Bot online: {self.user}")
-        if os.path.exists(COOKIE_FILE):
-            print(f"Da nap cookie: {COOKIE_FILE}")
-        else:
-            print("Khong tim thay cookies.txt - se chay khong cookie.")
-        print(f"POT provider: {POT_PROVIDER_URL}")
 
-
-bot = LeagueUltraDino()
-
+bot = KillLogBot()
 
 # =========================
-# CORE PLAY LOGIC
+# MODAL (BẢNG NHẬP THÔNG TIN)
 # =========================
-async def play_next(guild: discord.Guild, player: MusicPlayer):
-    vc = player.voice_client
-    if vc is None or not vc.is_connected():
-        player.is_playing = False
-        return
+class KillLogModal(discord.ui.Modal, title="Nhập thông tin Kill Log"):
+    player_name = discord.ui.TextInput(
+        label="Tên người chơi", 
+        placeholder="Nhập tên người chơi...", 
+        required=True
+    )
+    growth = discord.ui.TextInput(
+        label="Growth (Độ lớn)", 
+        placeholder="Ví dụ: 100%", 
+        required=True
+    )
+    dino_id = discord.ui.TextInput(
+        label="ID Dino đã chết", 
+        placeholder="Nhập ID của Dino...", 
+        required=True
+    )
 
-    song = player.next()
-    if song is None:
-        player.is_playing = False
-        return
+    def __init__(self, server_name, dino_name):
+        super().__init__()
+        self.server_name = server_name
+        self.dino_name = dino_name
 
-    player.is_playing = True
-    print(f"[PLAY] Dang xu ly bai: {song['title']}")
+    async def on_submit(self, interaction: discord.Interaction):
+        # Lấy thông tin từ modal
+        name = self.player_name.value
+        growth_val = self.growth.value
+        dino_id = self.dino_id.value
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S %d/%m/%Y")
 
-    try:
-        stream_url, title = await asyncio.to_thread(get_stream_url, song["url"])
+        # Tạo nội dung Log
+        log_content = (
+            f"**📌 KILL LOG MỚI NHẤT**\n"
+            f"**Server:** {self.server_name}\n"
+            f"**Dino:** {self.dino_name}\n"
+            f"**Người chơi:** {name}\n"
+            f"**Growth:** {growth_val}\n"
+            f"**ID Dino:** {dino_id}\n"
+            f"**Thời gian:** {timestamp}"
+        )
 
-        source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTS)
+        # Phản hồi tạm thời cho người dùng
+        await interaction.response.send_message("✅ Đã ghi nhận Kill Log thành công!", ephemeral=True)
 
-        def after_play(error):
-            if error:
-                print(f"[FFMPEG ERROR] Loi trong qua trinh phat: {error}")
-            else:
-                print(f"[PLAY] Phat xong bai: {title}")
+        # Lấy kênh Log
+        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+        if not log_channel:
+            print(f"Lỗi: Không tìm thấy kênh Log với ID: {LOG_CHANNEL_ID}")
+            return
 
-            player.is_playing = False
-            fut = asyncio.run_coroutine_threadsafe(
-                play_next(guild, player), bot.loop
-            )
+        global LOG_MESSAGE_ID
+
+        # Kiểm tra xem đã có tin nhắn Log nào chưa
+        if LOG_MESSAGE_ID:
             try:
-                fut.result(timeout=5)
-            except Exception as e:
-                print(f"[PLAY] Loi chuyen bai: {e}")
-
-        vc.play(source, after=after_play)
-        print(f"[PLAY] Da gui lenh phat toi Discord.")
-
-        if player.text_channel:
-            try:
-                await player.text_channel.send(
-                    f"🎵 Dang phat: **{discord.utils.escape_markdown(title)}**"
-                )
-            except Exception:
+                # Thử lấy tin nhắn cũ
+                old_message = await log_channel.fetch_message(LOG_MESSAGE_ID)
+                # Chỉnh sửa tin nhắn cũ thành nội dung mới
+                await old_message.edit(content=log_content)
+                return
+            except discord.NotFound:
+                # Nếu tin nhắn cũ bị xóa, tạo mới
                 pass
 
-    except Exception as error:
-        print(f"[PLAY ERROR] {type(error).__name__}: {error}")
-        if player.text_channel:
-            try:
-                await player.text_channel.send(
-                    f"⚠️ Loi phat bai: `{type(error).__name__}: {error}`"
-                )
-            except Exception:
-                pass
-        player.is_playing = False
-        await play_next(guild, player)
-
-async def ensure_voice(interaction: discord.Interaction):
-    member = interaction.guild.get_member(interaction.user.id)
-    if member is None or member.voice is None or member.voice.channel is None:
-        await interaction.followup.send("Hay vao phong thoai truoc.")
-        return None, None
-
-    channel = member.voice.channel
-    vc = interaction.guild.voice_client
-
-    try:
-        if vc is None:
-            print(f"[VOICE] Dang ket noi vao kenh: {channel.name}")
-            vc = await channel.connect(timeout=20, self_deaf=True)
-        elif vc.channel != channel:
-            print(f"[VOICE] Dang di chuyen sang kenh: {channel.name}")
-            await vc.move_to(channel)
-    except Exception as error:
-        print(f"[VOICE ERROR] {type(error).__name__}: {error}")
-        await interaction.followup.send(
-            f"Khong vao duoc phong thoai: `{type(error).__name__}: {error}`"
-        )
-        return None, None
-
-    player = get_player(interaction.guild.id)
-    player.voice_client = vc
-    player.text_channel = interaction.channel
-    return vc, player
-
+        # Nếu chưa có, gửi tin nhắn mới và lưu ID
+        new_message = await log_channel.send(log_content)
+        LOG_MESSAGE_ID = new_message.id
 
 # =========================
-# SLASH COMMANDS
+# VIEW (GIAO DIỆN CHỌN SERVER & DINO)
 # =========================
-@bot.tree.command(name="play", description="Phat nhac tu YouTube (link hoac ten bai)")
-@app_commands.describe(query="Link YouTube hoac ten bai hat")
-@app_commands.guild_only()
-async def play(interaction: discord.Interaction, query: str):
-    await interaction.response.defer(thinking=True)
+class ServerSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
 
-    query = query.strip()
-    if not query:
-        await interaction.followup.send("Ban chua nhap link hoac ten bai.")
-        return
+    @discord.ui.button(label="HỖ TRỢ / KILL LOG", style=discord.ButtonStyle.primary, custom_id="btn_kill_log")
+    async def support_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("Vui lòng chọn Server và Dino bên dưới:", ephemeral=True, view=DinoSelectView())
 
-    vc, player = await ensure_voice(interaction)
-    if vc is None:
-        return
+class DinoSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
 
-    try:
-        print(f"[/play] Nhan yeu cau: {query}")
-        url, title = await asyncio.to_thread(resolve_query, query)
-    except ValueError as error:
-        await interaction.followup.send(f"❌ {error}")
-        return
-    except Exception as error:
-        await interaction.followup.send(
-            f"❌ Khong lay duoc thong tin bai hat: `{type(error).__name__}: {error}`"
-        )
-        return
+    @discord.ui.select(
+        placeholder="Chọn Server...",
+        options=[
+            discord.SelectOption(label="Server VIP", value="VIP"),
+            discord.SelectOption(label="Server Premium", value="Premium"),
+            discord.SelectOption(label="Server Ultra", value="Ultra"),
+        ]
+    )
+    async def select_server(self, interaction: discord.Interaction, select: discord.ui.Select):
+        await interaction.response.send_message(f"Bạn đã chọn Server: **{select.values[0]}**\nVui lòng chọn Dino:", ephemeral=True, view=DinoTypeSelectView(select.values[0]))
 
-    if not url:
-        await interaction.followup.send("❌ Khong tim thay bai hat.")
-        return
+class DinoTypeSelectView(discord.ui.View):
+    def __init__(self, server_name):
+        super().__init__(timeout=None)
+        self.server_name = server_name
 
-    print(f"[/play] Tim thay bai: {title}")
-    player.add(url, title)
+    @discord.ui.select(
+        placeholder="Chọn loài Dino...",
+        options=[
+            discord.SelectOption(label="Tyrannosaurus", value="Tyrannosaurus"),
+            discord.SelectOption(label="Triceratops", value="Triceratops"),
+            discord.SelectOption(label="Allosaurus", value="Allosaurus"),
+            discord.SelectOption(label="Stegosaurus", value="Stegosaurus"),
+            discord.SelectOption(label="Deinosuchus", value="Deinosuchus"),
+            discord.SelectOption(label="Ceratosaurus", value="Ceratosaurus"),
+            discord.SelectOption(label="Pachycephalosaurus", value="Pachycephalosaurus"),
+            discord.SelectOption(label="Tenontosaurus", value="Tenontosaurus"),
+            discord.SelectOption(label="Omniraptor", value="Omniraptor"),
+            discord.SelectOption(label="Hypsilophodon", value="Hypsilophodon"),
+            discord.SelectOption(label="Beipiaosaurus", value="Beipiaosaurus"),
+            discord.SelectOption(label="Carnotaurus", value="Carnotaurus"),
+            discord.SelectOption(label="Diabloceratops", value="Diabloceratops"),
+            discord.SelectOption(label="Dilophosaurus", value="Dilophosaurus"),
+            discord.SelectOption(label="Dryosaurus", value="Dryosaurus"),
+            discord.SelectOption(label="Gallimimus", value="Gallimimus"),
+            discord.SelectOption(label="Herrerasaurus", value="Herrerasaurus"),
+            discord.SelectOption(label="Maiasaura", value="Maiasaura"),
+            discord.SelectOption(label="Pteranodon", value="Pteranodon"),
+            discord.SelectOption(label="Sauropelta", value="Sauropelta"),
+            discord.SelectOption(label="Suchomimus", value="Suchomimus"),
+            discord.SelectOption(label="Troodon", value="Troodon"),
+            discord.SelectOption(label="Tyrannosaurus Rex", value="Tyrannosaurus Rex"),
+            # Thêm các loài khác nếu cần
+        ]
+    )
+    async def select_dino(self, interaction: discord.Interaction, select: discord.ui.Select):
+        dino_name = select.values[0]
+        # Mở Modal để nhập thông tin
+        await interaction.response.send_modal(KillLogModal(self.server_name, dino_name))
 
-    if player.is_playing or vc.is_playing() or vc.is_paused():
-        await interaction.followup.send(
-            f"➕ Da them vao hang doi: **{discord.utils.escape_markdown(title)}**\n"
-            f"🔗 {url}"
-        )
-    else:
-        await interaction.followup.send(
-            f"⏳ Dang chuan bi phat: **{discord.utils.escape_markdown(title)}**\n"
-            f"🔗 {url}"
-        )
-        await play_next(interaction.guild, player)
+# =========================
+# LỆNH SLASH /SETUP_KILL_LOG
+# =========================
+@bot.tree.command(name="setup_kill_log", description="Tạo bảng chọn Server và Dino để ghi Kill Log")
+async def setup_kill_log(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="📋 HỆ THỐNG KILL LOG DINO",
+        description="Nhấn nút bên dưới để bắt đầu ghi nhận Kill Log.",
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text="League Ultra Dino")
+    await interaction.response.send_message(embed=embed, view=ServerSelectView())
 
-
-@bot.tree.command(name="skip", description="Bo qua bai hien tai")
-@app_commands.guild_only()
-async def skip(interaction: discord.Interaction):
-    vc = interaction.guild.voice_client
-    if vc and (vc.is_playing() or vc.is_paused()):
-        vc.stop()
-        await interaction.response.send_message("⏭️ Da bo qua bai hien tai.")
-    else:
-        await interaction.response.send_message("Bot khong dang phat nhac.")
-
-
-@bot.tree.command(name="pause", description="Tam dung nhac")
-@app_commands.guild_only()
-async def pause(interaction: discord.Interaction):
-    vc = interaction.guild.voice_client
-    if vc and vc.is_playing():
-        vc.pause()
-        await interaction.response.send_message("⏸️ Da tam dung.")
-    else:
-        await interaction.response.send_message("Bot khong dang phat nhac.")
-
-
-@bot.tree.command(name="resume", description="Tiep tuc phat nhac")
-@app_commands.guild_only()
-async def resume(interaction: discord.Interaction):
-    vc = interaction.guild.voice_client
-    if vc and vc.is_paused():
-        vc.resume()
-        await interaction.response.send_message("▶️ Da tiep tuc.")
-    else:
-        await interaction.response.send_message("Bot khong dang tam dung.")
-
-
-@bot.tree.command(name="queue", description="Xem hang doi nhac")
-@app_commands.guild_only()
-async def queue_cmd(interaction: discord.Interaction):
-    player = get_player(interaction.guild.id)
-    lines = []
-
-    if player.current:
-        lines.append(
-            f"🎵 **Dang phat:** {discord.utils.escape_markdown(player.current['title'])}"
-        )
-    if player.queue:
-        lines.append("")
-        lines.append("📋 **Hang doi:**")
-        for i, song in enumerate(player.queue[:10], start=1):
-            lines.append(f"{i}. {discord.utils.escape_markdown(song['title'])}")
-        if len(player.queue) > 10:
-            lines.append(f"... va {len(player.queue) - 10} bai khac.")
-
-    if not lines:
-        await interaction.response.send_message("Hang doi dang trong.")
-    else:
-        await interaction.response.send_message("\n".join(lines))
-
-
-@bot.tree.command(name="stop", description="Dung nhac va xoa hang doi")
-@app_commands.guild_only()
-async def stop(interaction: discord.Interaction):
-    vc = interaction.guild.voice_client
-    player = get_player(interaction.guild.id)
-
-    if vc and (vc.is_playing() or vc.is_paused()):
-        player.clear()
-        vc.stop()
-        await interaction.response.send_message("⏹️ Da dung nhac va xoa hang doi.")
-    else:
-        await interaction.response.send_message("Bot khong dang phat nhac.")
-
-
-@bot.tree.command(name="leave", description="Cho bot roi phong thoai")
-@app_commands.guild_only()
-async def leave(interaction: discord.Interaction):
-    vc = interaction.guild.voice_client
-    if vc is None:
-        await interaction.response.send_message("Bot khong o trong phong thoai.")
-        return
-
-    player = get_player(interaction.guild.id)
-    player.clear()
-
-    if vc.is_playing() or vc.is_paused():
-        vc.stop()
-
-    await vc.disconnect(force=True)
-    await interaction.response.send_message("👋 Bot da roi phong thoai.")
-
-
-print("Dang khoi dong League Ultra Dino...")
+# Chạy Bot
+print("Đang khởi động Kill Log Bot...")
 bot.run(TOKEN)
