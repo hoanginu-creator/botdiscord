@@ -4,18 +4,33 @@ from discord.ext import commands
 from discord import app_commands
 from dotenv import load_dotenv
 import datetime
+import logging
+
+# =========================
+# CẤU HÌNH LOG (ẨN CONSOLE)
+# =========================
+# Tắt tất cả log không cần thiết từ discord.py
+logging.getLogger('discord').setLevel(logging.ERROR)
+logging.getLogger('discord.http').setLevel(logging.ERROR)
+logging.getLogger('discord.gateway').setLevel(logging.ERROR)
+
+# Chỉ hiển thị log lỗi nghiêm trọng của bot
+logging.basicConfig(
+    level=logging.ERROR,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 # Load token từ file .env
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 if not TOKEN:
-    raise RuntimeError("Thiếu DISCORD_TOKEN trong file .env")
+    raise RuntimeError("Thiếu DISCORD_TOKEN trong file .env hoặc biến môi trường")
 
 # =========================
 # CẤU HÌNH KÊNH LOG
 # =========================
-# Thay ID này bằng ID kênh bạn muốn bot gửi Log Kill Dino
+# THAY ID NÀY BẰNG ID KÊNH LOG KILL DINO CỦA BẠN
 LOG_CHANNEL_ID = 123456789012345678  # <--- SỬA ID NÀY
 
 # Biến toàn cục lưu ID tin nhắn log duy nhất
@@ -30,11 +45,15 @@ class KillLogBot(discord.Client):
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
+        # Đồng bộ lệnh Slash toàn cầu
         await self.tree.sync()
-        print("Bot đã sẵn sàng và đồng bộ lệnh Slash!")
+        # Không in ra console để tránh log rác
+        # print("Bot đã sẵn sàng và đồng bộ lệnh Slash!")
 
     async def on_ready(self):
-        print(f"Bot online: {self.user}")
+        # Không in ra console
+        # print(f"Bot online: {self.user}")
+        pass
 
 bot = KillLogBot()
 
@@ -64,13 +83,11 @@ class KillLogModal(discord.ui.Modal, title="Nhập thông tin Kill Log"):
         self.dino_name = dino_name
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Lấy thông tin từ modal
         name = self.player_name.value
         growth_val = self.growth.value
         dino_id = self.dino_id.value
         timestamp = datetime.datetime.now().strftime("%H:%M:%S %d/%m/%Y")
 
-        # Tạo nội dung Log
         log_content = (
             f"**📌 KILL LOG MỚI NHẤT**\n"
             f"**Server:** {self.server_name}\n"
@@ -81,30 +98,23 @@ class KillLogModal(discord.ui.Modal, title="Nhập thông tin Kill Log"):
             f"**Thời gian:** {timestamp}"
         )
 
-        # Phản hồi tạm thời cho người dùng
-        await interaction.response.send_message("✅ Đã ghi nhận Kill Log thành công!", ephemeral=True)
+        await interaction.response.send_message("✅ Đã ghi nhận Kill Log!", ephemeral=True)
 
-        # Lấy kênh Log
         log_channel = bot.get_channel(LOG_CHANNEL_ID)
         if not log_channel:
-            print(f"Lỗi: Không tìm thấy kênh Log với ID: {LOG_CHANNEL_ID}")
+            logging.error(f"Không tìm thấy kênh Log với ID: {LOG_CHANNEL_ID}")
             return
 
         global LOG_MESSAGE_ID
 
-        # Kiểm tra xem đã có tin nhắn Log nào chưa
         if LOG_MESSAGE_ID:
             try:
-                # Thử lấy tin nhắn cũ
                 old_message = await log_channel.fetch_message(LOG_MESSAGE_ID)
-                # Chỉnh sửa tin nhắn cũ thành nội dung mới
                 await old_message.edit(content=log_content)
                 return
             except discord.NotFound:
-                # Nếu tin nhắn cũ bị xóa, tạo mới
                 pass
 
-        # Nếu chưa có, gửi tin nhắn mới và lưu ID
         new_message = await log_channel.send(log_content)
         LOG_MESSAGE_ID = new_message.id
 
@@ -165,12 +175,10 @@ class DinoTypeSelectView(discord.ui.View):
             discord.SelectOption(label="Suchomimus", value="Suchomimus"),
             discord.SelectOption(label="Troodon", value="Troodon"),
             discord.SelectOption(label="Tyrannosaurus Rex", value="Tyrannosaurus Rex"),
-            # Thêm các loài khác nếu cần
         ]
     )
     async def select_dino(self, interaction: discord.Interaction, select: discord.ui.Select):
         dino_name = select.values[0]
-        # Mở Modal để nhập thông tin
         await interaction.response.send_modal(KillLogModal(self.server_name, dino_name))
 
 # =========================
@@ -186,6 +194,10 @@ async def setup_kill_log(interaction: discord.Interaction):
     embed.set_footer(text="League Ultra Dino")
     await interaction.response.send_message(embed=embed, view=ServerSelectView())
 
-# Chạy Bot
-print("Đang khởi động Kill Log Bot...")
-bot.run(TOKEN)
+# =========================
+# CHẠY BOT
+# =========================
+if __name__ == "__main__":
+    # Ẩn log khởi động
+    # print("Đang khởi động Kill Log Bot...")
+    bot.run(TOKEN)
