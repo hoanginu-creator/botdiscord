@@ -8,12 +8,10 @@ import logging
 # =========================
 # CẤU HÌNH LOG (ẨN CONSOLE)
 # =========================
-# Tắt tất cả log không cần thiết từ discord.py
 logging.getLogger('discord').setLevel(logging.ERROR)
 logging.getLogger('discord.http').setLevel(logging.ERROR)
 logging.getLogger('discord.gateway').setLevel(logging.ERROR)
 
-# Chỉ hiển thị log lỗi nghiêm trọng của bot
 logging.basicConfig(
     level=logging.ERROR,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -28,11 +26,8 @@ if not TOKEN:
 # =========================
 # CẤU HÌNH KÊNH LOG
 # =========================
-# THAY ID NÀY BẰNG ID KÊNH LOG KILL DINO CỦA BẠN
-LOG_CHANNEL_ID = 1567394939317518507  # <--- SỬA ID NÀY
-
-# Biến toàn cục lưu ID tin nhắn log duy nhất
-LOG_MESSAGE_ID = None
+# ID kênh Log của bạn
+LOG_CHANNEL_ID = 1567394939317518507
 
 # =========================
 # KHỞI TẠO BOT
@@ -43,7 +38,6 @@ class KillLogBot(discord.Client):
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
-        # Đồng bộ lệnh Slash toàn cầu
         await self.tree.sync()
 
     async def on_ready(self):
@@ -62,12 +56,17 @@ class KillLogModal(discord.ui.Modal, title="Nhập thông tin Kill Log"):
     )
     growth = discord.ui.TextInput(
         label="Growth (Độ lớn)", 
-        placeholder="Ví dụ: 100%", 
+        placeholder="Ví dụ: 86", 
         required=True
     )
     dino_id = discord.ui.TextInput(
         label="ID Dino đã chết", 
         placeholder="Nhập ID của Dino...", 
+        required=True
+    )
+    kill_time = discord.ui.TextInput(
+        label="Thời gian giết", 
+        placeholder="Ví dụ: 04:40:46 04/11/2026", 
         required=True
     )
 
@@ -80,16 +79,17 @@ class KillLogModal(discord.ui.Modal, title="Nhập thông tin Kill Log"):
         name = self.player_name.value
         growth_val = self.growth.value
         dino_id = self.dino_id.value
-        timestamp = datetime.datetime.now().strftime("%H:%M:%S %d/%m/%Y")
+        k_time = self.kill_time.value
 
+        # Nội dung log (Đã đổi thành KILL LOG)
         log_content = (
-            f"**📌 KILL LOG MỚI NHẤT**\n"
+            f"**📌 KILL LOG**\n"
             f"**Server:** {self.server_name}\n"
             f"**Dino:** {self.dino_name}\n"
             f"**Người chơi:** {name}\n"
             f"**Growth:** {growth_val}\n"
             f"**ID Dino:** {dino_id}\n"
-            f"**Thời gian:** {timestamp}"
+            f"**Thời gian giết:** {k_time}"
         )
 
         await interaction.response.send_message("✅ Đã ghi nhận Kill Log!", ephemeral=True)
@@ -99,18 +99,8 @@ class KillLogModal(discord.ui.Modal, title="Nhập thông tin Kill Log"):
             logging.error(f"Không tìm thấy kênh Log với ID: {LOG_CHANNEL_ID}")
             return
 
-        global LOG_MESSAGE_ID
-
-        if LOG_MESSAGE_ID:
-            try:
-                old_message = await log_channel.fetch_message(LOG_MESSAGE_ID)
-                await old_message.edit(content=log_content)
-                return
-            except discord.NotFound:
-                pass
-
-        new_message = await log_channel.send(log_content)
-        LOG_MESSAGE_ID = new_message.id
+        # Gửi tin nhắn mới (Không xóa/sửa tin nhắn cũ)
+        await log_channel.send(log_content)
 
 # =========================
 # VIEW (GIAO DIỆN CHỌN SERVER & DINO)
@@ -119,7 +109,6 @@ class ServerSelectView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    # ĐÃ ĐỔI TÊN NÚT THÀNH "LOG KILL"
     @discord.ui.button(label="LOG KILL", style=discord.ButtonStyle.danger, custom_id="btn_kill_log")
     async def support_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("Vui lòng chọn Server và Dino bên dưới:", ephemeral=True, view=DinoSelectView())
